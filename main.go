@@ -106,29 +106,56 @@ func createSSHConnection() {
 	}
 	defer session.Close()
 
-	ToolID := "F00001"
-	command := "cd /work/keyDownloader/ && ./keyDownloader.sh " + ToolID + " > " + ToolID + ".csv"
-	fmt.Println(command)
-
-	// コマンド実行
-	var b bytes.Buffer
-	session.Stdout = &b
-	if err := session.Run(command); err != nil {
-		log.Fatal("Failed to run: " + err.Error())
+	tools := []string{
+		"F00001",
+		// "F00002",
 	}
-	fmt.Println(b.String())
+
+	for _, tool := range tools {
+		command := "cd /work/keyDownloader/ && ./keyDownloader.sh " + tool + " > " + tool + ".csv && cat " + tool + ".csv"
+		fmt.Println(command)
+
+		// コマンド実行
+		var b bytes.Buffer
+		session.Stdout = &b
+		if err := session.Run(command); err != nil {
+			log.Fatal("Failed to run: " + err.Error())
+		}
+		// fmt.Println(b.String())
+
+		// ディレクトリ作成
+		if err := os.MkdirAll("CompareFiles", 0777); err != nil {
+			fmt.Println(err)
+		}
+
+		// ファイル作成
+		f, err := os.Create("CompareFiles/" + tool + ".csv")
+		if err != nil {
+			panic(err)
+		}
+		defer os.Remove(f.Name())
+
+		if _, err = f.Write([]byte(b.Bytes())); err != nil {
+			panic(err)
+		}
+	}
+
+	// var s3List []string
+	s3List := GetS3gzList("http://localhost:18333", "seaweedfsadmin", "seaweedfsadmin")
+	kafkaKeyList := GetKafkaKeyList()
+
+	ComapreLists(s3List, kafkaKeyList)
 }
 
 func ComapreLists(s3BucketList []string, kafkaPathList []string) {
 	for _, gzfile := range s3BucketList {
 		Contains(kafkaPathList, gzfile)
 	}
-
 }
 
 func Contains(kafkaList []string, gzfile string) bool {
 	for _, message := range kafkaList {
-		if strings.Contains(gzfile, message) {
+		if strings.Contains(message, gzfile) {
 			return true
 		}
 	}
@@ -138,21 +165,25 @@ func Contains(kafkaList []string, gzfile string) bool {
 
 func GetS3gzList(url string, user string, pass string) []string {
 	var s3gzList []string
+	gzFIleCount := 0
 	sess = CreateS3Session(url, user, pass)
 	for _, prefix := range []string{
-		"DataPipeline/F00005/",
+		"DataPipeline/F00001/",
 	} {
 		items, _ := listObjects2(sess, "/eq-kafka", prefix)
 		for _, item := range items {
 			// fmt.Printf("%s\n", *item.Key)
 			s3gzList = append(s3gzList, *item.Key)
+			gzFIleCount++
 		}
 	}
+	fmt.Printf("GZ file in S3 Bucket is %d \n", gzFIleCount)
 	return s3gzList
 }
 
 func GetKafkaKeyList() []string {
-	fileName := "./CompareFiles/F00002.csv"
+	kafkaMessageCount := 0
+	fileName := "CompareFiles/F00001.csv"
 	fp, err := os.Open(fileName)
 	if err != nil {
 		panic(err)
@@ -172,7 +203,9 @@ func GetKafkaKeyList() []string {
 			panic(err)
 		}
 		record = append(record, tmp[0])
+		kafkaMessageCount++
 	}
+	fmt.Printf("kafka Message in Topic is %d \n", kafkaMessageCount)
 	return record
 }
 
